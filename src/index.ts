@@ -176,7 +176,7 @@ async function getRss(rssFeed: string, xmlEntityExpansionLimit: number): Promise
     rss = <FeedData>(await extract(rssFeed, {
       xmlParserOptions,
       getExtraEntryFields: (entry: any) => {
-        return { image: entry.image };
+        return { image: entry['media:thumbnail']?.['@_url'] ?? entry['media:content']?.['@_url'] };
       }
     }));
     core.debug(JSON.stringify(`Pre-filter feed items:\n\n${JSON.stringify(rss.entries, null, 2)}`));
