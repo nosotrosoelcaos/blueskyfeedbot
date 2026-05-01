@@ -41,6 +41,9 @@ inputs:
   xml-entity-expansion-limit:
     description: 'Maximum number of XML entity expansions allowed when parsing feeds (0 = unlimited)'
     default: '10000'
+  disable-images:
+    description: 'Disable attaching images from RSS entries to Bluesky posts'
+    default: 'false'
 runs:
   using: 'node24'
   main: 'dist/index.js'

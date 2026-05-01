@@ -5,11 +5,24 @@ import { mkdirp } from 'mkdirp';
 import { type FeedEntry, FeedData, extract } from '@extractus/feed-extractor';
 import crypto from 'crypto';
 import Handlebars from 'handlebars';
-import { AtpAgent, RichText } from '@atproto/api';
-import { AppBskyFeedPost } from '@atproto/api/src/client';
+import { AtpAgent, RichText, BlobRef } from '@atproto/api';
+import { AppBskyFeedPost, AppBskyEmbedImages } from '@atproto/api/src/client';
 
 function sha256(data: string): string {
   return crypto.createHash('sha256').update(data, 'utf-8').digest('hex');
+}
+
+async function uploadImage(agent: AtpAgent, imageUrl: string): Promise<BlobRef> {
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const contentType = response.headers.get('content-type') || 'image/jpeg';
+  const upload = await agent.uploadBlob(buffer, {
+    encoding: contentType
+  });
+  return upload.data.blob;
 }
 
 async function writeCache(cacheFile: string, cacheLimit: number, cache: string[]): Promise<void> {
@@ -39,6 +52,7 @@ async function postItems(
   statusTemplate: HandlebarsTemplateDelegate,
   dryRun: boolean,
   disableFacets: boolean,
+  disableImages: boolean,
   cache: string[],
   limit: number) {
   if (dryRun) {
@@ -99,12 +113,30 @@ async function postItems(
         }
         core.debug(`RichText:\n\n${JSON.stringify(rt, null, 2)}`);
 
+        let embed: AppBskyEmbedImages.Main | undefined;
+        const imageUrl = (item as any).image;
+        if (!disableImages && imageUrl) {
+          try {
+            const blob = await uploadImage(agent, imageUrl);
+            embed = {
+              $type: 'app.bsky.embed.images',
+              images: [{
+                image: blob,
+                alt: item.title || ''
+              }]
+            };
+          } catch (e) {
+            core.warning(`Failed to upload image for '${item.title}': ${(<Error>e).message}`);
+          }
+        }
+
         const record: AppBskyFeedPost.Record = {
           $type: 'app.bsky.feed.post',
           text: rt.text,
           facets: rt.facets,
           createdAt: new Date().toISOString(),
-          ...(lang && { langs: [lang] })
+          ...(lang && { langs: [lang] }),
+          ...(embed && { embed })
         };
         core.debug(`Record:\n\n${JSON.stringify(record, null, 2)}`);
 
@@ -141,7 +173,12 @@ async function getRss(rssFeed: string, xmlEntityExpansionLimit: number): Promise
     const xmlParserOptions = xmlEntityExpansionLimit > 0
       ? { processEntities: { maxTotalExpansions: xmlEntityExpansionLimit } }
       : { processEntities: { enabled: false } };
-    rss = <FeedData>(await extract(rssFeed, { xmlParserOptions }));
+    rss = <FeedData>(await extract(rssFeed, {
+      xmlParserOptions,
+      getExtraEntryFields: (entry: any) => {
+        return { image: entry.image };
+      }
+    }));
     core.debug(JSON.stringify(`Pre-filter feed items:\n\n${JSON.stringify(rss.entries, null, 2)}`));
     return rss;
   } catch (e) {
@@ -185,6 +222,8 @@ export async function main(): Promise<void> {
   core.debug(`dryRun: ${dryRun}`);
   const disableFacets = core.getBooleanInput('disable-facets');
   core.debug(`disableFacets: ${disableFacets}`);
+  const disableImages = core.getBooleanInput('disable-images');
+  core.debug(`disableImages: ${disableImages}`);
   const xmlEntityExpansionLimit = parseInt(core.getInput('xml-entity-expansion-limit'), 10);
   core.debug(`xmlEntityExpansionLimit: ${xmlEntityExpansionLimit}`);
 
@@ -223,6 +262,7 @@ export async function main(): Promise<void> {
     statusTemplate,
     dryRun,
     disableFacets,
+    disableImages,
     cache,
     limit);
 
